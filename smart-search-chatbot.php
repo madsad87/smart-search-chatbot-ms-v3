@@ -80,6 +80,7 @@ class SmartSearchChatbot {
         require_once SSGC_PLUGIN_DIR . 'includes/class-ssgc-widget.php';
         require_once SSGC_PLUGIN_DIR . 'includes/class-ssgc-chat.php';
         require_once SSGC_PLUGIN_DIR . 'includes/class-ssgc-logs.php';
+        require_once SSGC_PLUGIN_DIR . 'includes/class-ssgc-retrieval.php';
         
         // Admin pages are loaded only when needed in menu callbacks
     }

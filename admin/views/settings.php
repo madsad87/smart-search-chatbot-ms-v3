@@ -42,6 +42,34 @@ if (isset($_POST['ssgc_general_settings_nonce']) && wp_verify_nonce($_POST['ssgc
              '</p></div>';
     }
 }
+
+// Handle AI Toolkit settings submission
+if (isset($_POST['ssgc_toolkit_nonce']) && wp_verify_nonce($_POST['ssgc_toolkit_nonce'], 'ssgc_toolkit_settings')) {
+    if (current_user_can('manage_options')) {
+        $toolkit_settings = array(
+            'search_endpoint' => esc_url_raw($_POST['ssgc_toolkit']['search_endpoint'] ?? ''),
+            'api_key' => trim((string)($_POST['ssgc_toolkit']['api_key'] ?? '')),
+            'index_id' => sanitize_text_field($_POST['ssgc_toolkit']['index_id'] ?? ''),
+            'top_k' => (int)($_POST['ssgc_toolkit']['top_k'] ?? 5),
+            'min_score' => (float)($_POST['ssgc_toolkit']['min_score'] ?? 0),
+        );
+        
+        update_option('ssgc_toolkit', $toolkit_settings);
+        
+        echo '<div class="notice notice-success is-dismissible"><p>' . 
+             __('AI Toolkit settings saved successfully.', 'smart-search-chatbot') . 
+             '</p></div>';
+    }
+}
+
+// Get AI Toolkit settings
+$toolkit_settings = get_option('ssgc_toolkit', array(
+    'search_endpoint' => '',
+    'api_key' => '',
+    'index_id' => '',
+    'top_k' => 5,
+    'min_score' => 0.0,
+));
 ?>
 
 <div class="wrap ssgc-admin-page">
@@ -205,6 +233,88 @@ if (isset($_POST['ssgc_general_settings_nonce']) && wp_verify_nonce($_POST['ssgc
         </table>
         
         <?php submit_button(__('Save Settings', 'smart-search-chatbot')); ?>
+    </form>
+    
+    <!-- AI Toolkit (Smart Search) Settings -->
+    <form method="post" action="">
+        <?php wp_nonce_field('ssgc_toolkit_settings', 'ssgc_toolkit_nonce'); ?>
+        
+        <h2><?php _e('AI Toolkit (Smart Search)', 'smart-search-chatbot'); ?></h2>
+        <p><?php _e('Configure WP Engine AI Toolkit Smart Search integration for enhanced context retrieval.', 'smart-search-chatbot'); ?></p>
+        
+        <table class="form-table" role="presentation">
+            <tbody>
+                <!-- Search Endpoint -->
+                <tr>
+                    <th scope="row">
+                        <label for="search_endpoint"><?php _e('Search Endpoint', 'smart-search-chatbot'); ?></label>
+                    </th>
+                    <td>
+                        <input type="url" id="search_endpoint" name="ssgc_toolkit[search_endpoint]" value="<?php echo esc_attr($toolkit_settings['search_endpoint']); ?>" class="regular-text" placeholder="https://your-site.com/wp-json/ai-toolkit/v1/search" />
+                        <p class="description">
+                            <?php _e('Full URL to your AI Toolkit search endpoint. Leave empty to disable Smart Search integration.', 'smart-search-chatbot'); ?>
+                        </p>
+                    </td>
+                </tr>
+                
+                <!-- API Key -->
+                <tr>
+                    <th scope="row">
+                        <label for="toolkit_api_key"><?php _e('API Key', 'smart-search-chatbot'); ?></label>
+                    </th>
+                    <td>
+                        <input type="password" id="toolkit_api_key" name="ssgc_toolkit[api_key]" value="<?php echo esc_attr($toolkit_settings['api_key']); ?>" class="regular-text" />
+                        <button type="button" id="toggle-toolkit-key" class="button button-small">
+                            <?php _e('Show', 'smart-search-chatbot'); ?>
+                        </button>
+                        <p class="description">
+                            <?php _e('API key for the search endpoint (if required). Leave empty if no authentication is needed.', 'smart-search-chatbot'); ?>
+                        </p>
+                    </td>
+                </tr>
+                
+                <!-- Index ID -->
+                <tr>
+                    <th scope="row">
+                        <label for="index_id"><?php _e('Index ID', 'smart-search-chatbot'); ?></label>
+                    </th>
+                    <td>
+                        <input type="text" id="index_id" name="ssgc_toolkit[index_id]" value="<?php echo esc_attr($toolkit_settings['index_id']); ?>" class="regular-text" />
+                        <p class="description">
+                            <?php _e('Search index identifier (if required by your endpoint). Leave empty if not needed.', 'smart-search-chatbot'); ?>
+                        </p>
+                    </td>
+                </tr>
+                
+                <!-- Top K -->
+                <tr>
+                    <th scope="row">
+                        <label for="top_k"><?php _e('Max Results', 'smart-search-chatbot'); ?></label>
+                    </th>
+                    <td>
+                        <input type="number" id="top_k" name="ssgc_toolkit[top_k]" value="<?php echo esc_attr($toolkit_settings['top_k']); ?>" min="1" max="20" class="small-text" />
+                        <p class="description">
+                            <?php _e('Maximum number of search results to retrieve for context. Recommended: 3-7.', 'smart-search-chatbot'); ?>
+                        </p>
+                    </td>
+                </tr>
+                
+                <!-- Min Score -->
+                <tr>
+                    <th scope="row">
+                        <label for="min_score"><?php _e('Minimum Score', 'smart-search-chatbot'); ?></label>
+                    </th>
+                    <td>
+                        <input type="number" id="min_score" name="ssgc_toolkit[min_score]" value="<?php echo esc_attr($toolkit_settings['min_score']); ?>" min="0" max="1" step="0.01" class="small-text" />
+                        <p class="description">
+                            <?php _e('Minimum relevance score for search results (0.0-1.0). Lower scores include more results. Recommended: 0.0-0.3.', 'smart-search-chatbot'); ?>
+                        </p>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <?php submit_button(__('Save AI Toolkit Settings', 'smart-search-chatbot')); ?>
     </form>
     
     <!-- API Test Section -->
@@ -386,8 +496,22 @@ jQuery(document).ready(function($) {
         }
     });
     
+    // Toggle Toolkit API key visibility
+    $('#toggle-toolkit-key').on('click', function() {
+        var input = $('#toolkit_api_key');
+        var button = $(this);
+        
+        if (input.attr('type') === 'password') {
+            input.attr('type', 'text');
+            button.text('<?php esc_js(_e('Hide', 'smart-search-chatbot')); ?>');
+        } else {
+            input.attr('type', 'password');
+            button.text('<?php esc_js(_e('Show', 'smart-search-chatbot')); ?>');
+        }
+    });
+    
     // Test API connection
-    $('#test-api').on('click', function() {
+    $('#test-api').on('click', async function() {
         var button = $(this);
         var resultsDiv = $('#test-results');
         var outputDiv = $('.ssgc-test-output');
@@ -396,19 +520,27 @@ jQuery(document).ready(function($) {
         resultsDiv.show();
         outputDiv.text('<?php esc_js(_e('Testing API connection...', 'smart-search-chatbot')); ?>');
         
-        // Simulate API test (would need backend implementation)
-        setTimeout(function() {
-            var provider = $('#api_provider').val();
-            var hasApiKey = $('#api_key').val().length > 0;
+        try {
+            const response = await fetch('<?php echo esc_js(rest_url('ssgc/v1/test')); ?>', {
+                method: 'GET',
+                credentials: 'same-origin',
+                headers: {
+                    'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>'
+                }
+            });
             
-            if (!hasApiKey) {
-                outputDiv.text('<?php esc_js(_e('Error: No API key provided. Please enter your API key and try again.', 'smart-search-chatbot')); ?>');
+            const data = await response.json();
+            
+            if (data.ok) {
+                outputDiv.text('✅ Connected to ' + data.provider + ' (' + data.model + ') in ' + data.latency_ms + 'ms');
             } else {
-                outputDiv.text('<?php esc_js(_e('API test functionality requires backend implementation. This is a placeholder for testing the connection to your selected AI provider.', 'smart-search-chatbot')); ?>');
+                outputDiv.text('❌ ' + (data.error || 'Test failed'));
             }
-            
-            button.prop('disabled', false).text('<?php esc_js(_e('Test API Connection', 'smart-search-chatbot')); ?>');
-        }, 2000);
+        } catch (error) {
+            outputDiv.text('❌ Network error: ' + error.message);
+        }
+        
+        button.prop('disabled', false).text('<?php esc_js(_e('Test API Connection', 'smart-search-chatbot')); ?>');
     });
     
     // Validate temperature range

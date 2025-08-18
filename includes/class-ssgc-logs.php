@@ -276,6 +276,78 @@ class SSGC_Logs {
     }
     
     /**
+     * Insert a new chat log entry
+     */
+    public static function insert($data) {
+        global $wpdb;
+        
+        $settings = get_option('ssgc_log_settings', array());
+        if (!($settings['enabled'] ?? true)) {
+            return false;
+        }
+        
+        $table_name = $wpdb->prefix . 'ssgc_chat_logs';
+        
+        $insert_data = array(
+            'session_id' => $data['session_id'] ?? '',
+            'user_message' => $data['user_message'] ?? '',
+            'bot_response' => $data['bot_response'] ?? '',
+            'timestamp' => current_time('mysql'),
+            'response_time' => $data['response_time'] ?? null,
+            'tokens_used' => $data['tokens_used'] ?? null,
+        );
+        
+        // Add IP and user agent if enabled
+        if ($settings['log_ip'] ?? true) {
+            $insert_data['user_ip'] = $data['user_ip'] ?? $_SERVER['REMOTE_ADDR'] ?? '';
+        }
+        
+        if ($settings['log_user_agent'] ?? true) {
+            $insert_data['user_agent'] = $data['user_agent'] ?? $_SERVER['HTTP_USER_AGENT'] ?? '';
+        }
+        
+        // Apply PII redaction if enabled
+        if ($settings['redact_pii'] ?? true) {
+            $insert_data['user_message'] = self::redact_pii($insert_data['user_message']);
+        }
+        
+        $result = $wpdb->insert(
+            $table_name,
+            $insert_data,
+            array('%s', '%s', '%s', '%s', '%f', '%d', '%s', '%s')
+        );
+        
+        if ($result === false) {
+            throw new Exception('Failed to insert chat log: ' . $wpdb->last_error);
+        }
+        
+        return $wpdb->insert_id;
+    }
+    
+    /**
+     * Redact PII from text
+     */
+    private static function redact_pii($text) {
+        if (empty($text)) {
+            return $text;
+        }
+        
+        // Basic PII redaction patterns
+        $patterns = array(
+            '/\b\d{3}-\d{2}-\d{4}\b/' => '[SSN]',           // SSN
+            '/\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/' => '[CARD]', // Credit card
+            '/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/' => '[EMAIL]', // Email
+            '/\b\d{3}[\s.-]?\d{3}[\s.-]?\d{4}\b/' => '[PHONE]', // Phone
+        );
+        
+        foreach ($patterns as $pattern => $replacement) {
+            $text = preg_replace($pattern, $replacement, $text);
+        }
+        
+        return $text;
+    }
+    
+    /**
      * Get session details
      */
     public function get_session_details($session_id) {

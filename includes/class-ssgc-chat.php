@@ -16,11 +16,6 @@ class SSGC_Chat {
     private static $instance = null;
     
     /**
-     * Rate limiting cache
-     */
-    private $rate_limit_cache = array();
-    
-    /**
      * Get single instance
      */
     public static function get_instance() {
@@ -44,330 +39,248 @@ class SSGC_Chat {
         // Chat endpoint
         register_rest_route('ssgc/v1', '/chat', array(
             'methods' => 'POST',
-            'callback' => array($this, 'handle_chat_request'),
-            'permission_callback' => '__return_true',
-            'args' => array(
-                'session_id' => array(
-                    'required' => true,
-                    'type' => 'string',
-                    'validate_callback' => array($this, 'validate_session_id'),
-                ),
-                'prompt' => array(
-                    'required' => true,
-                    'type' => 'string',
-                    'sanitize_callback' => 'sanitize_textarea_field',
-                ),
-            ),
+            'callback' => array($this, 'rest_chat'),
+            'permission_callback' => '__return_true', // public; we will rate-limit
         ));
-    }
-    
-    /**
-     * Validate session ID format
-     */
-    public function validate_session_id($value) {
-        return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $value);
+        
+        // Test API connection endpoint
+        register_rest_route('ssgc/v1', '/test', array(
+            'methods' => 'GET',
+            'callback' => array($this, 'rest_test_connection'),
+            'permission_callback' => function() { return current_user_can('manage_options'); }, // admin-only
+        ));
+        
+        // Health check endpoint
+        register_rest_route('ssgc/v1', '/health', array(
+            'methods' => 'GET',
+            'callback' => array($this, 'rest_health_check'),
+            'permission_callback' => '__return_true',
+        ));
     }
     
     /**
      * Handle chat request
      */
-    public function handle_chat_request($request) {
-        $start_time = microtime(true);
-        
-        // Get parameters
-        $session_id = $request->get_param('session_id');
-        $prompt = $request->get_param('prompt');
-        
-        // Rate limiting
-        if (!$this->check_rate_limit($session_id)) {
-            return new WP_Error('rate_limit', 'Too many requests. Please wait before sending another message.', array('status' => 429));
+    public function rest_chat($request) {
+        $body = json_decode($request->get_body(), true);
+        $prompt = isset($body['prompt']) ? trim(wp_strip_all_tags((string)$body['prompt'])) : '';
+        $session = isset($body['session_id']) ? (string)$body['session_id'] : '';
+
+        if ($prompt === '' || $session === '' || !preg_match('/^[a-f0-9-]{36}$/i', $session)) {
+            return new WP_REST_Response(array('error' => 'Invalid input'), 400);
         }
         
-        // Get log settings for PII redaction
-        $log_settings = get_option('ssgc_log_settings', array());
-        if ($log_settings['redact_pii'] ?? true) {
-            $prompt = $this->redact_pii($prompt);
+        if (!self::rate_limit_ok($session)) {
+            return new WP_REST_Response(array('error' => 'rate_limited'), 429);
+        }
+
+        // (1) Persona
+        $system = self::build_persona_system();
+
+        // (2) Retrieval (stub for now)
+        $chunks = SSGC_Retrieval::similarity_search($prompt, 5);
+        list($contextTxt, $rawCitations) = SSGC_Retrieval::format_context($chunks);
+
+        // (3) Build messages
+        $messages = array();
+        $messages[] = array('role' => 'system', 'content' => $system);
+        if (!empty($contextTxt)) {
+            $messages[] = array('role' => 'system', 'content' => "Context (from site content):\n{$contextTxt}");
+        }
+        $messages[] = array('role' => 'user', 'content' => $prompt);
+
+        // (4) Call provider (OpenAI for now)
+        $ai = get_option('ssgc_general_settings', array());
+        $key = isset($ai['api_key']) ? trim($ai['api_key']) : '';
+        $model = !empty($ai['model']) ? $ai['model'] : 'gpt-3.5-turbo';
+        
+        if (!$key) {
+            return new WP_REST_Response(array('error' => 'missing_api_key'), 400);
         }
         
-        try {
-            // Get persona settings
-            $persona_settings = get_option('ssgc_persona_settings', array());
-            
-            // Build messages with persona
-            $messages = $this->build_messages($prompt, $persona_settings);
-            
-            // Get context from Smart Search if available
-            $context = $this->get_smart_search_context($prompt);
-            
-            // Add context to messages if available
-            if (!empty($context['chunks'])) {
-                $context_text = $this->format_context($context['chunks']);
-                $messages[0]['content'] .= "\n\nContext from site content:\n" . $context_text;
+        $t0 = microtime(true);
+        $resp = wp_remote_post('https://api.openai.com/v1/chat/completions', array(
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $key,
+                'Content-Type' => 'application/json',
+            ),
+            'body' => wp_json_encode(array(
+                'model' => $model,
+                'messages' => $messages,
+                'temperature' => 0.2,
+                'max_tokens' => 600,
+            )),
+            'timeout' => 20,
+        ));
+        
+        if (is_wp_error($resp)) {
+            return new WP_REST_Response(array('error' => 'provider_http', 'detail' => $resp->get_error_message()), 502);
+        }
+        
+        $code = wp_remote_retrieve_response_code($resp);
+        $json = json_decode(wp_remote_retrieve_body($resp), true);
+        
+        if ($code < 200 || $code >= 300) {
+            $msg = isset($json['error']['message']) ? $json['error']['message'] : ('Provider error ' . $code);
+            return new WP_REST_Response(array('error' => 'provider_' . $code, 'detail' => $msg), 502);
+        }
+        
+        $text = $json['choices'][0]['message']['content'] ?? '';
+        $usage = $json['usage'] ?? null;
+        $lat_ms = (int) round((microtime(true) - $t0) * 1000);
+
+        // (5) Citations (from retrieval stub)
+        $cites = array();
+        foreach ($rawCitations as $c) {
+            if (!empty($c['title']) && !empty($c['url'])) {
+                $cites[] = array('title' => $c['title'], 'url' => $c['url']);
             }
-            
-            // Call LLM
-            $response = $this->call_llm($messages);
-            
-            if (is_wp_error($response)) {
-                throw new Exception($response->get_error_message());
-            }
-            
-            // Calculate response time
-            $response_time = microtime(true) - $start_time;
-            
-            // Log the conversation
-            $this->log_conversation($session_id, $prompt, $response['text'], $response_time, $response['usage']['tokens'] ?? 0);
-            
-            // Prepare response with citations
-            $chat_response = array(
-                'text' => $response['text'],
-                'citations' => $context['citations'] ?? array(),
-                'usage' => $response['usage'] ?? array(),
-                'response_time' => round($response_time, 3)
-            );
-            
-            return rest_ensure_response($chat_response);
-            
-        } catch (Exception $e) {
-            error_log('SSGC Chat Error: ' . $e->getMessage());
-            
-            return new WP_Error('chat_error', 'Sorry, I encountered an error processing your request. Please try again.', array('status' => 500));
         }
+
+        // (6) Log (reuse your SSGC_Logs if available)
+        if (class_exists('SSGC_Logs')) {
+            try {
+                SSGC_Logs::insert(array(
+                    'session_id' => $session,
+                    'user_message' => $prompt,
+                    'bot_response' => $text,
+                    'response_time' => $lat_ms / 1000.0,
+                    'tokens_used' => isset($usage['total_tokens']) ? (int)$usage['total_tokens'] : null,
+                    'user_ip' => $_SERVER['REMOTE_ADDR'] ?? '',
+                    'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
+                ));
+            } catch (Exception $e) {
+                // swallow logging errors
+                error_log('SSGC Logging Error: ' . $e->getMessage());
+            }
+        }
+
+        return new WP_REST_Response(array(
+            'text' => $text,
+            'citations' => $cites,
+            'usage' => $usage,
+        ), 200);
     }
     
     /**
-     * Check rate limiting
+     * Simple rate limiting
      */
-    private function check_rate_limit($session_id) {
-        $ip = $_SERVER['REMOTE_ADDR'] ?? '';
-        $key = $ip . '_' . $session_id;
-        $now = time();
-        
-        // Clean old entries
-        foreach ($this->rate_limit_cache as $cache_key => $timestamp) {
-            if ($now - $timestamp > 60) { // 1 minute window
-                unset($this->rate_limit_cache[$cache_key]);
-            }
-        }
-        
-        // Count recent requests
-        $recent_requests = 0;
-        foreach ($this->rate_limit_cache as $cache_key => $timestamp) {
-            if (strpos($cache_key, $key) === 0 && $now - $timestamp <= 60) {
-                $recent_requests++;
-            }
-        }
-        
-        // Allow 10 requests per minute
-        if ($recent_requests >= 10) {
+    private static function rate_limit_ok(string $sessionId): bool {
+        // Simple transient-based throttle: 1 req / 2 seconds per session + IP
+        $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+        $key = 'ssgc_rl_' . md5($sessionId . '|' . $ip);
+        if (get_transient($key)) {
             return false;
         }
-        
-        // Record this request
-        $this->rate_limit_cache[$key . '_' . $now] = $now;
-        
+        set_transient($key, 1, 2); // 2 seconds
         return true;
     }
     
     /**
-     * Build messages array with persona
+     * Build persona system message
      */
-    private function build_messages($prompt, $persona_settings) {
-        $system_message = $persona_settings['instructions'] ?? 'You are a helpful AI assistant.';
+    private static function build_persona_system(): string {
+        $persona = get_option('ssgc_persona_settings', array());
+        $instructions = isset($persona['instructions']) ? trim($persona['instructions']) : 'You are a helpful AI assistant.';
+        $style = isset($persona['style']) ? trim($persona['style']) : 'friendly, concise.';
+        $site = get_bloginfo('name');
         
-        // Add style guidance
-        if (!empty($persona_settings['style'])) {
-            $system_message .= "\n\nStyle: " . $persona_settings['style'];
-        }
-        
-        $messages = array(
-            array(
-                'role' => 'system',
-                'content' => $system_message
-            ),
-            array(
-                'role' => 'user',
-                'content' => $prompt
-            )
-        );
-        
-        return apply_filters('ssgc_build_messages', $messages, $prompt, $persona_settings);
+        return "Role & Voice:\n{$instructions}\n\nStyle:\n{$style}\n\nSite:\n{$site}\n\nRules:\n- Keep answers grounded in provided context when present.\n- Prefer bullets and short paragraphs.\n- Include source links when context includes URLs.\n";
     }
     
     /**
-     * Get context from Smart Search
+     * Test API connection endpoint
      */
-    private function get_smart_search_context($query) {
-        $context = array(
-            'chunks' => array(),
-            'citations' => array()
-        );
-        
-        // Check if Smart Search is available
-        if (!$this->has_smart_search()) {
-            return $context;
-        }
-        
-        try {
-            $results = $this->ssgc_similarity_search($query, 5);
-            
-            foreach ($results as $result) {
-                $context['chunks'][] = array(
-                    'title' => $result['title'],
-                    'content' => $result['snippet'],
-                    'url' => $result['url'],
-                    'score' => $result['score']
-                );
-                
-                $context['citations'][] = array(
-                    'title' => $result['title'],
-                    'url' => $result['url']
-                );
+    public function rest_test_connection($request) {
+        $settings = get_option('ssgc_general_settings', array());
+        $provider = isset($settings['api_provider']) ? strtolower(sanitize_text_field($settings['api_provider'])) : 'openai';
+        $model = !empty($settings['model']) ? sanitize_text_field($settings['model']) : 'gpt-3.5-turbo';
+        $result = array('ok' => false, 'provider' => $provider, 'model' => $model);
+
+        $t0 = microtime(true);
+
+        if ($provider === 'openai') {
+            $key = isset($settings['api_key']) ? trim($settings['api_key']) : '';
+            if (!$key) {
+                return new WP_REST_Response(array_merge($result, array('error' => 'Missing OpenAI API key in settings.')), 400);
             }
             
-        } catch (Exception $e) {
-            error_log('SSGC Smart Search Error: ' . $e->getMessage());
-        }
-        
-        return $context;
-    }
-    
-    /**
-     * Smart Search similarity search helper
-     */
-    private function ssgc_similarity_search($query, $limit = 5) {
-        // This is a placeholder implementation
-        // In a real implementation, you would integrate with WP Engine's Smart Search API
-        
-        if (function_exists('wpengine_smart_search_query')) {
-            // Use WP Engine Smart Search if available
-            $results = wpengine_smart_search_query($query, array('limit' => $limit));
-            return $this->normalize_search_results($results);
-        }
-        
-        // Fallback: return empty results
-        return array();
-    }
-    
-    /**
-     * Normalize search results to consistent format
-     */
-    private function normalize_search_results($results) {
-        $normalized = array();
-        
-        foreach ($results as $result) {
-            $normalized[] = array(
-                'title' => $result['title'] ?? 'Untitled',
-                'url' => $result['url'] ?? '#',
-                'snippet' => $result['excerpt'] ?? $result['content'] ?? '',
-                'score' => $result['score'] ?? 0
+            $body = array(
+                'model' => $model,
+                'messages' => array(array('role' => 'user', 'content' => 'ping')),
+                'max_tokens' => 4,
+                'temperature' => 0,
             );
+            
+            $resp = wp_remote_post('https://api.openai.com/v1/chat/completions', array(
+                'headers' => array(
+                    'Authorization' => 'Bearer ' . $key,
+                    'Content-Type' => 'application/json',
+                ),
+                'body' => wp_json_encode($body),
+                'timeout' => 12,
+            ));
+            
+            if (is_wp_error($resp)) {
+                return new WP_REST_Response(array_merge($result, array(
+                    'error' => 'HTTP error: ' . $resp->get_error_message(),
+                )), 502);
+            }
+            
+            $code = wp_remote_retrieve_response_code($resp);
+            $json = json_decode(wp_remote_retrieve_body($resp), true);
+            
+            if ($code >= 200 && $code < 300 && !empty($json['choices'][0]['message']['content'])) {
+                $lat = (int) round(1000 * (microtime(true) - $t0));
+                return new WP_REST_Response(array(
+                    'ok' => true,
+                    'provider' => 'openai',
+                    'model' => $model,
+                    'latency_ms' => $lat,
+                ), 200);
+            }
+            
+            // Extract best available error info
+            $err = isset($json['error']['message']) ? $json['error']['message'] : ('Unexpected status ' . $code);
+            return new WP_REST_Response(array_merge($result, array('error' => $err)), 502);
         }
-        
-        return $normalized;
+
+        // Placeholder for other providers
+        return new WP_REST_Response(array_merge($result, array('error' => 'Unsupported provider: ' . $provider)), 400);
     }
     
     /**
-     * Format context for LLM
+     * Health check endpoint
      */
-    private function format_context($chunks) {
-        $context_text = '';
-        
-        foreach ($chunks as $chunk) {
-            $context_text .= "Title: " . $chunk['title'] . "\n";
-            $context_text .= "Content: " . $chunk['content'] . "\n";
-            $context_text .= "URL: " . $chunk['url'] . "\n\n";
-        }
-        
-        return $context_text;
-    }
-    
-    /**
-     * Call LLM (placeholder implementation)
-     */
-    private function call_llm($messages) {
-        // This is a placeholder implementation
-        // In a real implementation, you would integrate with OpenAI, Gemini, or other LLM APIs
-        
-        // For now, return a mock response
-        $response = array(
-            'text' => 'I\'m a placeholder response. To enable full functionality, please configure your LLM API settings.',
-            'usage' => array(
-                'tokens' => 50
-            )
+    public function rest_health_check($request) {
+        $health = array(
+            'ok' => true,
+            'timestamp' => current_time('mysql'),
+            'version' => SSGC_VERSION ?? '1.0.0'
         );
         
-        // Check if we have Smart Search context
-        $has_context = false;
-        foreach ($messages as $message) {
-            if (strpos($message['content'], 'Context from site content:') !== false) {
-                $has_context = true;
-                break;
+        // Check AI Toolkit configuration
+        $tk = SSGC_Retrieval::options();
+        $has_toolkit_cfg = !empty($tk['search_endpoint']);
+        $health['has_ai_toolkit'] = $has_toolkit_cfg;
+        
+        // Optional lightweight probe to endpoint
+        if ($has_toolkit_cfg) {
+            $connectivity = SSGC_Retrieval::test_connectivity();
+            $health['toolkit_reachable'] = $connectivity['success'];
+            if (!$connectivity['success']) {
+                $health['toolkit_error'] = $connectivity['error'];
             }
         }
         
-        if (!$has_context && !$this->has_smart_search()) {
-            $response['text'] = 'I\'d be happy to help! However, to provide the most accurate and relevant information from your site, please install and enable the WP Engine AI Toolkit or Smart Search plugin.';
-        }
+        // Check if OpenAI is configured
+        $ai_settings = get_option('ssgc_general_settings', array());
+        $health['has_openai_key'] = !empty($ai_settings['api_key']);
         
-        return $response;
-    }
-    
-    /**
-     * Check if Smart Search is available
-     */
-    private function has_smart_search() {
-        return class_exists('WPEngine_Smart_Search') || 
-               function_exists('wpengine_smart_search_init') ||
-               function_exists('wpengine_smart_search_query');
-    }
-    
-    /**
-     * Redact PII from prompt
-     */
-    private function redact_pii($text) {
-        // Basic PII redaction patterns
-        $patterns = array(
-            '/\b\d{3}-\d{2}-\d{4}\b/' => '[SSN]',           // SSN
-            '/\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/' => '[CARD]', // Credit card
-            '/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/' => '[EMAIL]', // Email
-            '/\b\d{3}[\s.-]?\d{3}[\s.-]?\d{4}\b/' => '[PHONE]', // Phone
-        );
-        
-        foreach ($patterns as $pattern => $replacement) {
-            $text = preg_replace($pattern, $replacement, $text);
-        }
-        
-        return $text;
-    }
-    
-    /**
-     * Log conversation
-     */
-    private function log_conversation($session_id, $user_message, $bot_response, $response_time, $tokens_used) {
+        // Check if logging is enabled
         $log_settings = get_option('ssgc_log_settings', array());
+        $health['logging_enabled'] = $log_settings['enabled'] ?? true;
         
-        if (!($log_settings['enabled'] ?? true)) {
-            return;
-        }
-        
-        global $wpdb;
-        
-        $table_name = $wpdb->prefix . 'ssgc_chat_logs';
-        
-        $wpdb->insert(
-            $table_name,
-            array(
-                'session_id' => $session_id,
-                'user_message' => $user_message,
-                'bot_response' => $bot_response,
-                'timestamp' => current_time('mysql'),
-                'user_ip' => $_SERVER['REMOTE_ADDR'] ?? '',
-                'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
-                'response_time' => $response_time,
-                'tokens_used' => $tokens_used
-            ),
-            array('%s', '%s', '%s', '%s', '%s', '%s', '%f', '%d')
-        );
+        return new WP_REST_Response($health, 200);
     }
 }
