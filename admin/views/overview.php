@@ -95,11 +95,53 @@ $persona_settings = $persona->get_settings();
         </div>
         
         <!-- Health Status -->
+        <?php
+        // Expect $ssgc_health from the controller
+        $hOpenAI = $ssgc_health['openai'] ?? array('state' => 'not_configured', 'label' => 'Not Available', 'detail' => '');
+        $hMVDB   = $ssgc_health['mvdb']   ?? array('state' => 'not_configured', 'label' => 'Not Available', 'detail' => '');
+
+        function ssgc_badge($state, $label) {
+            $clr = array(
+                'ok'             => '#1a7f37',   // green
+                'warn'           => '#9a6700',   // amber
+                'error'          => '#d1242f',   // red
+                'not_configured' => '#6e7781',   // gray
+            );
+            $color = $clr[$state] ?? '#6e7781';
+            return '<span style="display:inline-block;padding:.2em .6em;border-radius:.5em;background:' . $color . ';color:white;font-weight:600;">' . $label . '</span>';
+        }
+        ?>
         <div class="ssgc-card">
             <h2><?php _e('System Health', 'smart-search-chatbot'); ?></h2>
-            <div class="ssgc-health-status" id="ssgc-health-status">
-                <div class="ssgc-loading"><?php _e('Checking system health...', 'smart-search-chatbot'); ?></div>
-            </div>
+            <table class="widefat striped">
+                <tbody>
+                    <tr>
+                        <td style="width:180px;"><?php _e('System Status:', 'smart-search-chatbot'); ?></td>
+                        <td><?php
+                            $overall = ($hOpenAI['state'] === 'ok' && $hMVDB['state'] === 'ok') ? 'OK' : 'Checking';
+                            echo esc_html($overall);
+                        ?></td>
+                    </tr>
+                    <tr>
+                        <td><?php _e('AI Toolkit (OpenAI):', 'smart-search-chatbot'); ?></td>
+                        <td>
+                            <?php echo ssgc_badge($hOpenAI['state'], $hOpenAI['label']); ?>
+                            <span style="margin-left:8px;color:#555;"><?php echo esc_html($hOpenAI['detail']); ?></span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><?php _e('Smart Search (MVDB):', 'smart-search-chatbot'); ?></td>
+                        <td>
+                            <?php echo ssgc_badge($hMVDB['state'], $hMVDB['label']); ?>
+                            <span style="margin-left:8px;color:#555;"><?php echo esc_html($hMVDB['detail']); ?></span>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            <p style="margin-top:8px;">
+                <a href="<?php echo esc_url(admin_url('admin.php?page=ssgc-settings')); ?>" class="button"><?php _e('Open Settings', 'smart-search-chatbot'); ?></a>
+                <a href="<?php echo esc_url(admin_url('admin.php?page=ssgc-hub&ssgc_health_clear=1')); ?>" class="button" onclick="fetch('<?php echo esc_url(admin_url('admin.php')); ?>?ssgc_health_clear=1',{credentials:'same-origin'}).then(()=>location.reload()); return false;"><?php _e('Re-check', 'smart-search-chatbot'); ?></a>
+            </p>
         </div>
         
         <!-- Persona Status -->
@@ -347,37 +389,3 @@ $persona_settings = $persona->get_settings();
     font-weight: 500;
 }
 </style>
-
-<script>
-jQuery(document).ready(function($) {
-    // Load health status
-    $.get(ssgc_admin.rest_url + 'health')
-        .done(function(data) {
-            var html = '';
-            
-            html += '<div class="ssgc-health-item">';
-            html += '<span>System Status:</span>';
-            html += '<span class="ssgc-health-status-ok">OK</span>';
-            html += '</div>';
-            
-            html += '<div class="ssgc-health-item">';
-            html += '<span>AI Toolkit:</span>';
-            html += '<span class="' + (data.has_ai_toolkit ? 'ssgc-health-status-ok' : 'ssgc-health-status-warning') + '">';
-            html += data.has_ai_toolkit ? 'Available' : 'Not Available';
-            html += '</span>';
-            html += '</div>';
-            
-            html += '<div class="ssgc-health-item">';
-            html += '<span>Smart Search:</span>';
-            html += '<span class="' + (data.has_smart_search ? 'ssgc-health-status-ok' : 'ssgc-health-status-warning') + '">';
-            html += data.has_smart_search ? 'Available' : 'Not Available';
-            html += '</span>';
-            html += '</div>';
-            
-            $('#ssgc-health-status').html(html);
-        })
-        .fail(function() {
-            $('#ssgc-health-status').html('<div class="ssgc-health-item"><span>System Status:</span><span class="ssgc-health-status-error">Error loading status</span></div>');
-        });
-});
-</script>

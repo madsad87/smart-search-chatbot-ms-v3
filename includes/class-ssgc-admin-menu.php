@@ -8,6 +8,9 @@
 // Prevent direct access
 defined('ABSPATH') || exit;
 
+// Load health monitoring class
+require_once SSGC_PLUGIN_DIR . 'includes/class-ssgc-health.php';
+
 /**
  * Helper function to get our admin screen IDs
  */
@@ -46,6 +49,23 @@ class SSGC_Admin_Menu {
         add_action('admin_menu', array($this, 'add_admin_menu'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_assets'));
+        
+        // Clear health cache when settings are updated
+        add_action('update_option_ssgc_general_settings', array('SSGC_Health', 'clear_cache'), 10, 0);
+        add_action('update_option_ssgc_toolkit', array('SSGC_Health', 'clear_cache'), 10, 0);
+        
+        // Handle health cache clearing via AJAX
+        add_action('admin_init', array($this, 'handle_health_clear'));
+    }
+    
+    /**
+     * Handle health cache clearing via AJAX
+     */
+    public function handle_health_clear() {
+        if (isset($_GET['ssgc_health_clear']) && current_user_can('manage_options')) {
+            SSGC_Health::clear_cache();
+            wp_die('OK');
+        }
     }
     
     /**
@@ -212,6 +232,7 @@ class SSGC_Admin_Menu {
      * Guarded view renderers - only load views when needed
      */
     public static function render_overview() {
+        $ssgc_health = SSGC_Health::get_all();
         $view = SSGC_PLUGIN_DIR . 'admin/views/overview.php';
         if (file_exists($view)) {
             require $view;
