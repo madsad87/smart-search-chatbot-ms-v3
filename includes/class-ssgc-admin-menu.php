@@ -45,6 +45,7 @@ class SSGC_Admin_Menu {
     private function __construct() {
         add_action('admin_menu', array($this, 'add_admin_menu'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_assets'));
     }
     
     /**
@@ -143,6 +144,26 @@ class SSGC_Admin_Menu {
             'nonce' => wp_create_nonce('ssgc_admin_nonce'),
             'rest_url' => rest_url('ssgc/v1/'),
         ));
+    }
+    
+    /**
+     * Enqueue admin assets for specific pages
+     */
+    public function enqueue_admin_assets($hook) {
+        // Load only on our settings page
+        if (isset($_GET['page']) && $_GET['page'] === 'ssgc-settings') {
+            // Tiny bootstrap; we use inline script, so no file needed
+            wp_register_script('ssgc-admin-inline', false, array(), SSGC_VERSION, true);
+            wp_enqueue_script('ssgc-admin-inline');
+
+            // Localize data: REST nonce + index.php?rest_route URL
+            $data = array(
+                'nonce' => wp_create_nonce('wp_rest'),
+                'searchTestUrl' => site_url('index.php?rest_route=/ssgc/v1/search-test'),
+                'searchDebugUrl' => site_url('index.php?rest_route=/ssgc/v1/search-debug'),
+            );
+            wp_add_inline_script('ssgc-admin-inline', 'window.SSGC_ADMIN = ' . wp_json_encode($data) . ';', 'before');
+        }
     }
     
     /**

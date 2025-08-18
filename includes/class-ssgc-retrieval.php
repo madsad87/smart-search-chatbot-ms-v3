@@ -3,7 +3,7 @@
  * Smart Search Retrieval Helper
  * 
  * Handles context retrieval and formatting for chat responses
- * Supports WP Engine AI Toolkit Smart Search integration
+ * Supports WP Engine AI Toolkit GraphQL integration with similarity and find modes
  */
 
 // Prevent direct access
@@ -12,14 +12,51 @@ defined('ABSPATH') || exit;
 class SSGC_Retrieval {
     
     /**
+     * Get candidate GraphQL queries for different endpoint shapes
+     */
+    private static function candidate_queries(): array {
+        return array(
+            array(
+                'name'  => 'similarity_docs',
+                'query' => 'query($q:String!){
+                    similarity(query:$q){
+                      docs { score data }
+                    }
+                }',
+                'path'  => array('data','similarity','docs')
+            ),
+            array(
+                'name'  => 'similarity_documents',
+                'query' => 'query($q:String!){
+                    similarity(query:$q){
+                      documents { score data }
+                    }
+                }',
+                'path'  => array('data','similarity','documents')
+            ),
+            array(
+                'name'  => 'find_documents',
+                'query' => 'query($q:String!){
+                    find(query:$q){
+                      documents { score data }
+                    }
+                }',
+                'path'  => array('data','find','documents')
+            ),
+        );
+    }
+    
+    /**
      * Get AI Toolkit configuration options
      */
     public static function options(): array {
         $opt = get_option('ssgc_toolkit', array());
         $defaults = array(
-            'search_endpoint' => '',   // e.g. https://your-site/wp-json/ai-toolkit/v1/search
-            'api_key'         => '',   // if required
-            'index_id'        => '',   // if required
+            'search_endpoint' => '',
+            'api_key'         => '',
+            'index_id'        => '',
+            'mode'            => 'similarity', // 'similarity' | 'find'
+            'fields'          => 'post_title:8, post_content:1',
             'top_k'           => 5,
             'min_score'       => 0.0,
         );
@@ -27,101 +64,103 @@ class SSGC_Retrieval {
     }
     
     /**
-     * Query WP Engine AI Toolkit Smart Search.
+     * Parse field boosts from CSV string
+     */
+    private static function parse_field_boosts(string $csv): array {
+        // "post_title:8, post_content:1" -> [ ['name'=>'post_title','boost'=>8], ... ]
+        $out = array();
+        foreach (explode(',', $csv) as $chunk) {
+            $chunk = trim($chunk);
+            if ($chunk === '') continue;
+            $parts = array_map('trim', explode(':', $chunk, 2));
+            $name  = $parts[0] ?? '';
+            $boost = isset($parts[1]) ? (float)$parts[1] : 1.0;
+            if ($name !== '') {
+                $out[] = array('name' => $name, 'boost' => $boost);
+            }
+        }
+        return $out ?: array(
+            array('name' => 'post_title', 'boost' => 8), 
+            array('name' => 'post_content', 'boost' => 1)
+        );
+    }
+    
+    /**
+     * Query WP Engine AI Toolkit Smart Search using GraphQL.
      * Return shape: [ ['title'=>'','url'=>'','snippet'=>'','score'=>float], ... ]
      */
-    public static function similarity_search(string $query, int $k = 5): array {
-        $cfg = self::options();
-        $endpoint = trim((string)$cfg['search_endpoint']);
-        
-        if ($endpoint === '' || !preg_match('#^https?://#i', $endpoint)) {
-            // Toolkit not configured; return empty
-            return array();
-        }
-        
-        $k = max(1, (int)$k);
-        $topK = (int)($cfg['top_k'] ?: $k);
-        $minScore = (float)$cfg['min_score'];
+    public static function similarity_search(string $q, int $topK = 5, float $minScore = 0.0): array {
+        $tk = get_option('ssgc_toolkit', array());
+        $endpoint = trim($tk['search_endpoint'] ?? '');
+        $token    = trim($tk['api_key'] ?? '');
+        if (!$endpoint || !$token) return array();
 
-        $headers = array('Content-Type' => 'application/json');
-        if (!empty($cfg['api_key'])) {
-            $headers['Authorization'] = 'Bearer ' . $cfg['api_key'];
-        }
+        $vars = array('q' => $q);
+        $cands = self::candidate_queries();
 
-        // Generic request body; adjust keys in settings if your endpoint differs.
-        $body = array(
-            'query' => $query,
-            'topK'  => $topK,
-        );
-        if (!empty($cfg['index_id'])) {
-            $body['index'] = $cfg['index_id'];
-        }
+        $docs = array();
+        foreach ($cands as $cand) {
+            $resp = wp_remote_post($endpoint, array(
+                'headers' => array(
+                    'Authorization' => 'Bearer ' . $token,
+                    'Content-Type'  => 'application/json'
+                ),
+                'timeout' => 20,
+                'body'    => wp_json_encode(array('query' => $cand['query'], 'variables' => $vars)),
+            ));
+            $code = wp_remote_retrieve_response_code($resp);
+            $body = wp_remote_retrieve_body($resp);
+            if ($code !== 200 || empty($body)) continue;
 
-        $resp = wp_remote_post($endpoint, array(
-            'headers' => $headers,
-            'body'    => wp_json_encode($body),
-            'timeout' => 12,
-        ));
-        
-        if (is_wp_error($resp)) {
-            error_log('SSGC Toolkit Error: ' . $resp->get_error_message());
-            return array();
-        }
-        
-        $code = wp_remote_retrieve_response_code($resp);
-        if ($code < 200 || $code >= 300) {
-            error_log('SSGC Toolkit HTTP Error: ' . $code);
-            return array();
-        }
-        
-        $json = json_decode(wp_remote_retrieve_body($resp), true);
-        if (!is_array($json)) {
-            return array();
-        }
+            $json = json_decode($body, true);
+            if (!is_array($json)) continue;
 
-        // Try several common shapes:
-        $items = array();
-        if (isset($json['results']) && is_array($json['results'])) {
-            $items = $json['results'];
-        } elseif (isset($json['data']) && is_array($json['data'])) {
-            $items = $json['data'];
-        } elseif (isset($json['hits']) && is_array($json['hits'])) {
-            $items = $json['hits'];
-        } else {
-            // Fallback: assume the root is the array
-            $items = $json;
+            $node = $json;
+            foreach ($cand['path'] as $p) {
+                if (!isset($node[$p])) { $node = null; break; }
+                $node = $node[$p];
+            }
+            if (!empty($node) && is_array($node)) { $docs = $node; break; }
         }
 
         $out = array();
-        foreach ($items as $it) {
-            if (!is_array($it)) continue;
-            
-            // Common fields seen in RAG examples; adjust if your endpoint differs
-            $title   = $it['title']   ?? ($it['metadata']['title'] ?? '');
-            $url     = $it['url']     ?? ($it['metadata']['url'] ?? '');
-            $snippet = $it['snippet'] ?? ($it['content'] ?? ($it['text'] ?? ''));
-            $score   = (float)($it['score'] ?? ($it['_score'] ?? 0.0));
+        if (!empty($docs)) {
+            foreach ($docs as $doc) {
+                $data = $doc['data'] ?? array(); // Map<any,any>
+                if (!is_array($data)) $data = array();
 
-            if ($minScore > 0 && $score < $minScore) {
-                continue;
-            }
+                // Heuristics over Map keys
+                $pick = function($arr, $keys) {
+                    foreach ($keys as $k) {
+                        if (!array_key_exists($k, $arr)) continue;
+                        $v = $arr[$k];
+                        if (is_array($v) && isset($v['rendered'])) $v = $v['rendered'];
+                        if (is_string($v) && $v !== '') return $v;
+                    }
+                    // fallback: first non-empty string value
+                    foreach ($arr as $v) {
+                        if (is_array($v) && isset($v['rendered']) && is_string($v['rendered']) && $v['rendered'] !== '') return $v['rendered'];
+                        if (is_string($v) && $v !== '') return $v;
+                    }
+                    return '';
+                };
 
-            if (!$title && isset($it['id'])) {
-                $title = 'Document ' . $it['id'];
-            }
-            
-            $out[] = array(
-                'title'   => wp_strip_all_tags((string)$title),
-                'url'     => esc_url_raw((string)$url),
-                'snippet' => wp_strip_all_tags((string)$snippet),
-                'score'   => $score,
-            );
-            
-            if (count($out) >= $topK) {
-                break;
+                $title   = $pick($data, array('post_title','title','name','heading'));
+                $url     = $pick($data, array('post_url','url','permalink','link'));
+                $snippet = $pick($data, array('post_content','content','excerpt','summary','text','description','body'));
+
+                $score = (float)($doc['score'] ?? $doc['_score'] ?? 0.0);
+                if ($minScore > 0 && $score < $minScore) continue;
+
+                $title   = wp_strip_all_tags((string)$title);
+                $snippet = wp_strip_all_tags((string)$snippet);
+                if (strlen($snippet) > 500) $snippet = substr($snippet, 0, 500) . '…';
+                $url     = esc_url_raw((string)$url);
+
+                $out[] = compact('title','url','snippet','score');
+                if (count($out) >= $topK) break;
             }
         }
-        
         return $out;
     }
     
@@ -194,26 +233,5 @@ class SSGC_Retrieval {
      */
     public static function is_available(): bool {
         return self::is_configured();
-    }
-    
-    /**
-     * Normalize search results to consistent format (legacy)
-     */
-    private static function normalize_search_results($results): array {
-        if (!is_array($results)) {
-            return array();
-        }
-        
-        $normalized = array();
-        foreach ($results as $result) {
-            $normalized[] = array(
-                'title' => $result['title'] ?? 'Untitled',
-                'url' => $result['url'] ?? '#',
-                'snippet' => $result['excerpt'] ?? ($result['content'] ?? ''),
-                'score' => $result['score'] ?? 0.0
-            );
-        }
-        
-        return $normalized;
     }
 }

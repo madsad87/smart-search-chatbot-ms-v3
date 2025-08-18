@@ -50,8 +50,11 @@ if (isset($_POST['ssgc_toolkit_nonce']) && wp_verify_nonce($_POST['ssgc_toolkit_
             'search_endpoint' => esc_url_raw($_POST['ssgc_toolkit']['search_endpoint'] ?? ''),
             'api_key' => trim((string)($_POST['ssgc_toolkit']['api_key'] ?? '')),
             'index_id' => sanitize_text_field($_POST['ssgc_toolkit']['index_id'] ?? ''),
+            'mode' => in_array($_POST['ssgc_toolkit']['mode'] ?? 'similarity', array('similarity', 'find'), true) ? $_POST['ssgc_toolkit']['mode'] : 'similarity',
+            'fields' => sanitize_text_field($_POST['ssgc_toolkit']['fields'] ?? 'post_title:8, post_content:1'),
             'top_k' => (int)($_POST['ssgc_toolkit']['top_k'] ?? 5),
             'min_score' => (float)($_POST['ssgc_toolkit']['min_score'] ?? 0),
+            'restrict_to_context' => !empty($_POST['ssgc_toolkit']['restrict_to_context']) ? true : false,
         );
         
         update_option('ssgc_toolkit', $toolkit_settings);
@@ -67,8 +70,11 @@ $toolkit_settings = get_option('ssgc_toolkit', array(
     'search_endpoint' => '',
     'api_key' => '',
     'index_id' => '',
+    'mode' => 'similarity',
+    'fields' => 'post_title:8, post_content:1',
     'top_k' => 5,
     'min_score' => 0.0,
+    'restrict_to_context' => false,
 ));
 ?>
 
@@ -286,6 +292,35 @@ $toolkit_settings = get_option('ssgc_toolkit', array(
                     </td>
                 </tr>
                 
+                <!-- Mode -->
+                <tr>
+                    <th scope="row">
+                        <label for="toolkit_mode"><?php _e('Search Mode', 'smart-search-chatbot'); ?></label>
+                    </th>
+                    <td>
+                        <select id="toolkit_mode" name="ssgc_toolkit[mode]">
+                            <option value="similarity" <?php selected($toolkit_settings['mode'], 'similarity'); ?>><?php _e('Similarity Search', 'smart-search-chatbot'); ?></option>
+                            <option value="find" <?php selected($toolkit_settings['mode'], 'find'); ?>><?php _e('Find Search', 'smart-search-chatbot'); ?></option>
+                        </select>
+                        <p class="description">
+                            <?php _e('Search mode: "similarity" uses vector similarity, "find" uses text search. Similarity is recommended for most use cases.', 'smart-search-chatbot'); ?>
+                        </p>
+                    </td>
+                </tr>
+                
+                <!-- Fields -->
+                <tr>
+                    <th scope="row">
+                        <label for="toolkit_fields"><?php _e('Field Boosts', 'smart-search-chatbot'); ?></label>
+                    </th>
+                    <td>
+                        <input type="text" id="toolkit_fields" name="ssgc_toolkit[fields]" value="<?php echo esc_attr($toolkit_settings['fields']); ?>" class="regular-text" placeholder="post_title:8, post_content:1" />
+                        <p class="description">
+                            <?php _e('Field boost weights for similarity search (comma-separated). Format: field_name:boost_weight. Higher weights prioritize that field.', 'smart-search-chatbot'); ?>
+                        </p>
+                    </td>
+                </tr>
+                
                 <!-- Top K -->
                 <tr>
                     <th scope="row">
@@ -311,11 +346,43 @@ $toolkit_settings = get_option('ssgc_toolkit', array(
                         </p>
                     </td>
                 </tr>
+                
+                <!-- Restrict to Context -->
+                <tr>
+                    <th scope="row">
+                        <label for="restrict_to_context"><?php _e('Answer Restrictions', 'smart-search-chatbot'); ?></label>
+                    </th>
+                    <td>
+                        <fieldset>
+                            <label for="restrict_to_context">
+                                <input type="checkbox" id="restrict_to_context" name="ssgc_toolkit[restrict_to_context]" value="1" <?php checked(!empty($toolkit_settings['restrict_to_context'])); ?> />
+                                <?php _e('Restrict answers to MVDB context only', 'smart-search-chatbot'); ?>
+                            </label>
+                            <p class="description">
+                                <?php _e('When enabled, the assistant will answer only using indexed site content. If no relevant content is found, it will say it doesn\'t know instead of using general knowledge.', 'smart-search-chatbot'); ?>
+                            </p>
+                        </fieldset>
+                    </td>
+                </tr>
             </tbody>
         </table>
         
         <?php submit_button(__('Save AI Toolkit Settings', 'smart-search-chatbot')); ?>
     </form>
+    
+    <!-- Search Debug Section -->
+    <div class="ssgc-test-section">
+        <h2><?php _e('Search Debug', 'smart-search-chatbot'); ?></h2>
+        <p><?php _e('Test your MVDB endpoint and view parsed results used for RAG.', 'smart-search-chatbot'); ?></p>
+        
+        <div class="ssgc-test-container">
+            <input type="text" id="ssgc-test-q" placeholder="<?php esc_attr_e('Try a query like: pricing', 'smart-search-chatbot'); ?>" style="width: 320px; margin-right: 10px;" />
+            <button type="button" class="button" id="ssgc-test-search">
+                <?php _e('Run Search', 'smart-search-chatbot'); ?>
+            </button>
+            <pre id="ssgc-test-out" style="margin-top: 8px; max-height: 260px; overflow: auto; background: #f6f7f7; padding: 12px; border-radius: 6px; font-size: 12px; line-height: 1.4;"><?php _e('(results will appear here)', 'smart-search-chatbot'); ?></pre>
+        </div>
+    </div>
     
     <!-- API Test Section -->
     <div class="ssgc-test-section">
@@ -562,5 +629,88 @@ jQuery(document).ready(function($) {
         var name = $(this).val() || 'smart_search_chat';
         $(this).next('.description').html('<?php esc_js(_e('The shortcode name to use. Current shortcode:', 'smart-search-chatbot')); ?> <code>[' + name + ']</code>');
     });
+});
+</script>
+
+<?php
+  // Inline bootstrap for the Search Debug panel (nonce + REST URLs)
+  $__ssgc_admin_boot = array(
+    'nonce'          => wp_create_nonce('wp_rest'),
+    'searchTestUrl'  => site_url('index.php?rest_route=/ssgc/v1/search-test'),
+    'searchDebugUrl' => site_url('index.php?rest_route=/ssgc/v1/search-debug'),
+  );
+?>
+<script>
+  // Provide SSGC_ADMIN if not already set by enqueue
+  window.SSGC_ADMIN = window.SSGC_ADMIN || <?php echo wp_json_encode($__ssgc_admin_boot); ?>;
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('ssgc-test-search');
+  const q   = document.getElementById('ssgc-test-q');
+  const out = document.getElementById('ssgc-test-out');
+
+  if (!btn) { console.warn('[SSGC] Debug button not found'); return; }
+  if (!window.SSGC_ADMIN) { console.warn('[SSGC] SSGC_ADMIN missing'); return; }
+
+  const TEST_URL   = SSGC_ADMIN.searchTestUrl;
+  const DEBUG_URL  = SSGC_ADMIN.searchDebugUrl;
+  const NONCE      = SSGC_ADMIN.nonce;
+
+  console.log('[SSGC] Debug ready', {TEST_URL, DEBUG_URL});
+
+  async function tryFetch(base, term) {
+    const url = base + (base.includes('?') ? '&' : '?') + 'q=' + encodeURIComponent(term || 'test');
+    const res = await fetch(url, {
+      credentials: 'same-origin',
+      headers: { 'X-WP-Nonce': NONCE }
+    });
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch { data = { rawText: text }; }
+    return { res, data, url };
+  }
+
+  btn.addEventListener('click', async function(){
+    out.textContent = 'Searching…';
+    const term = (q && q.value) ? q.value : 'test';
+    try {
+      let {res, data, url} = await tryFetch(TEST_URL, term);
+      if (!res.ok && res.status !== 401) {
+        ({res, data, url} = await tryFetch(DEBUG_URL, term));
+      }
+      if (!res.ok || data.error) {
+        out.textContent = '❌ ' + (data.error ? JSON.stringify(data.error) : (res.status + ' ' + res.statusText)) + '\nURL: ' + url + (data.rawText ? ('\n\n' + data.rawText) : '');
+        return;
+      }
+
+      const raw = data.raw || {};
+      const s = raw?.data?.similarity;
+      const f = raw?.data?.find;
+      const docs = (s?.docs || s?.documents || f?.documents || []);
+      const first = docs[0] || null;
+      const preview = first ? {
+        keys: Object.keys(first).slice(0,10),
+        dataKeys: first.data ? Object.keys(first.data).slice(0,10) : [],
+        score: first.score ?? first._score ?? null,
+        sampleTitle: first.data?.post_title || first.data?.title || null,
+        sampleUrl: first.data?.post_url || first.data?.url || null
+      } : null;
+
+      out.textContent = JSON.stringify({ status: data.status, parsed: data.parsed, rawPreview: preview }, null, 2);
+    } catch(e){
+      out.textContent = '❌ ' + e.message;
+    }
+  });
+  
+  // Allow Enter key to trigger search
+  if (q) {
+    q.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        btn.click();
+      }
+    });
+  }
 });
 </script>
