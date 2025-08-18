@@ -5,7 +5,7 @@ A comprehensive AI-powered chatbot plugin for WordPress with advanced Smart Sear
 ## 🚀 What's New in Version 3
 
 ### 🔍 Advanced MVDB Integration
-- **Multi-Vector Database Support**: Resilient GraphQL queries that adapt to different MVDB endpoint schemas
+- **Managed Vector Database Support**: Resilient GraphQL queries that adapt to different MVDB endpoint schemas
 - **Intelligent Field Mapping**: Heuristic parsing of Map-based data fields with automatic fallback strategies
 - **Schema-Agnostic Queries**: Support for `similarity.docs`, `similarity.documents`, and `find.documents` response formats
 - **Real-Time Debug Panel**: Interactive MVDB testing with raw response inspection and field mapping visualization
@@ -526,7 +526,7 @@ GPL v2 or later. See LICENSE file for details.
 ## Changelog
 
 ### Version 3.0.0 (Current)
-- **NEW**: Multi-Vector Database (MVDB) support with schema-agnostic queries
+- **NEW**: Managed Vector Database (MVDB) support with schema-agnostic queries
 - **NEW**: Interactive Search Debug panel for real-time MVDB testing
 - **NEW**: Context restriction controls (MVDB-only responses)
 - **NEW**: Heuristic field mapping for flexible data structures
@@ -570,4 +570,4 @@ For support, please:
 
 ---
 
-**Smart Search Chatbot Version 3** - Enterprise-grade AI-powered conversations for WordPress with advanced Multi-Vector Database integration and comprehensive debugging tools.
+**Smart Search Chatbot Version 3** - Enterprise-grade AI-powered conversations for WordPress with advanced Managed Vector Database integration and comprehensive debugging tools.
