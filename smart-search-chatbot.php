@@ -3,7 +3,7 @@
  * Plugin Name: Smart Search Chatbot
  * Plugin URI: https://github.com/madsad87/smart-search-chatbot-ms
  * Description: AI-powered chatbot with Smart Search integration, chat logs, personas, and site-agnostic widget support.
- * Version: 2.0.0
+ * Version: 0.1.0
  * Author: Madison Sadler
  * License: GPL v2 or later
  * Text Domain: smart-search-chatbot
@@ -19,7 +19,7 @@ defined('ABSPATH') || exit;
 define('SSGC_PLUGIN_FILE', __FILE__);
 define('SSGC_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('SSGC_PLUGIN_URL', plugin_dir_url(__FILE__));
-define('SSGC_VERSION', '2.0.0');
+define('SSGC_VERSION', '0.1.0');
 
 /**
  * Main Smart Search Chatbot class
