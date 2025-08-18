@@ -1,0 +1,95 @@
+/**
+ * Smart Search Chatbot Widget Styles
+ * 
+ * Minimal CSS for the floating widget bubble and panel
+ * Most styles are applied inline via JavaScript for better isolation
+ */
+
+/* Widget bubble base styles (enhanced by JS) */
+.ssgc-bubble {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+}
+
+.ssgc-bubble svg {
+    pointer-events: none;
+}
+
+/* Widget panel base styles (enhanced by JS) */
+.ssgc-panel {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+/* Widget iframe styles */
+.ssgc-iframe {
+    background: white;
+}
+
+/* Proactive greeting styles */
+.ssgc-greeting {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+}
+
+/* Ensure widget elements are above other content */
+.ssgc-bubble,
+.ssgc-panel,
+.ssgc-greeting {
+    pointer-events: auto;
+}
+
+/* Responsive adjustments */
+@media (max-width: 480px) {
+    .ssgc-panel {
+        left: 10px !important;
+        right: 10px !important;
+        width: auto !important;
+        max-width: none !important;
+    }
+    
+    .ssgc-bubble {
+        width: 50px !important;
+        height: 50px !important;
+    }
+    
+    .ssgc-bubble svg {
+        width: 20px !important;
+        height: 20px !important;
+    }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .ssgc-bubble {
+        border: 2px solid currentColor;
+    }
+    
+    .ssgc-panel {
+        border: 1px solid currentColor;
+    }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    .ssgc-bubble,
+    .ssgc-panel,
+    .ssgc-greeting {
+        transition: none !important;
+        animation: none !important;
+    }
+}
+
+/* Print styles - hide widget when printing */
+@media print {
+    .ssgc-bubble,
+    .ssgc-panel,
+    .ssgc-greeting {
+        display: none !important;
+    }
+}
