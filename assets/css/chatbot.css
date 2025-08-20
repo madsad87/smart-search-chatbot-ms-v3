@@ -1,0 +1,259 @@
+/**
+ * Smart Search Chatbot Frontend Styles
+ * 
+ * Styles for the shortcode chatbot interface
+ */
+
+/* Container */
+.ssgc-chatbot-container {
+    max-width: 100%;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow: hidden;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+/* Messages area */
+.ssgc-messages {
+    height: 400px;
+    overflow-y: auto;
+    padding: 20px;
+    background: #f9f9f9;
+    border-bottom: 1px solid #eee;
+}
+
+/* Individual message */
+.ssgc-message {
+    margin-bottom: 15px;
+    display: flex;
+    flex-direction: column;
+}
+
+.ssgc-message-user {
+    align-items: flex-end;
+}
+
+.ssgc-message-bot {
+    align-items: flex-start;
+}
+
+/* Message content */
+.ssgc-message-content {
+    max-width: 80%;
+    padding: 12px 16px;
+    border-radius: 18px;
+    word-wrap: break-word;
+    line-height: 1.4;
+}
+
+.ssgc-message-user .ssgc-message-content {
+    background: #007cba;
+    color: white;
+    border-bottom-right-radius: 4px;
+}
+
+.ssgc-message-bot .ssgc-message-content {
+    background: white;
+    color: #333;
+    border: 1px solid #e1e1e1;
+    border-bottom-left-radius: 4px;
+}
+
+/* Typing indicator */
+.ssgc-typing .ssgc-message-content {
+    background: #f0f0f0;
+    color: #666;
+    font-style: italic;
+}
+
+/* Citations */
+.ssgc-citations {
+    margin-top: 8px;
+    max-width: 80%;
+}
+
+.ssgc-citations-title {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 4px;
+    font-weight: 500;
+}
+
+.ssgc-citation {
+    display: inline-block;
+    background: #f0f6fc;
+    color: #0969da;
+    text-decoration: none;
+    padding: 4px 8px;
+    margin: 2px 4px 2px 0;
+    border-radius: 12px;
+    font-size: 12px;
+    border: 1px solid #d0d7de;
+    transition: background-color 0.2s;
+}
+
+.ssgc-citation:hover {
+    background: #dbeafe;
+    text-decoration: none;
+}
+
+/* Input container */
+.ssgc-input-container {
+    display: flex;
+    padding: 15px;
+    background: white;
+    gap: 10px;
+}
+
+/* Input field */
+#ssgc-input {
+    flex: 1;
+    padding: 12px 16px;
+    border: 1px solid #ddd;
+    border-radius: 20px;
+    outline: none;
+    font-size: 14px;
+    transition: border-color 0.2s;
+}
+
+#ssgc-input:focus {
+    border-color: #007cba;
+    box-shadow: 0 0 0 2px rgba(0, 124, 186, 0.1);
+}
+
+/* Send button */
+#ssgc-send {
+    padding: 12px 20px;
+    background: #007cba;
+    color: white;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: background-color 0.2s;
+    min-width: 60px;
+}
+
+#ssgc-send:hover {
+    background: #005a87;
+}
+
+#ssgc-send:active {
+    background: #004a73;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .ssgc-chatbot-container {
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+    }
+    
+    .ssgc-messages {
+        height: 300px;
+        padding: 15px;
+    }
+    
+    .ssgc-message-content {
+        max-width: 90%;
+        font-size: 14px;
+    }
+    
+    .ssgc-input-container {
+        padding: 12px;
+    }
+    
+    #ssgc-input {
+        font-size: 16px; /* Prevents zoom on iOS */
+    }
+}
+
+/* Scrollbar styling for webkit browsers */
+.ssgc-messages::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ssgc-messages::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+.ssgc-messages::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+
+.ssgc-messages::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
+/* Loading animation for typing indicator */
+.ssgc-typing .ssgc-message-content::after {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: #666;
+    margin-left: 4px;
+    animation: ssgc-typing-dots 1.4s infinite;
+}
+
+@keyframes ssgc-typing-dots {
+    0%, 60%, 100% {
+        transform: scale(1);
+        opacity: 0.5;
+    }
+    30% {
+        transform: scale(1.2);
+        opacity: 1;
+    }
+}
+
+/* Accessibility improvements */
+.ssgc-chatbot-container:focus-within {
+    outline: 2px solid #007cba;
+    outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .ssgc-message-bot .ssgc-message-content {
+        border-color: #000;
+    }
+    
+    .ssgc-citation {
+        border-color: #000;
+    }
+    
+    #ssgc-input {
+        border-color: #000;
+    }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    .ssgc-citation {
+        transition: none;
+    }
+    
+    #ssgc-input {
+        transition: none;
+    }
+    
+    #ssgc-send {
+        transition: none;
+    }
+    
+    @keyframes ssgc-typing-dots {
+        0%, 100% {
+            opacity: 0.5;
+        }
+        50% {
+            opacity: 1;
+        }
+    }
+}
